@@ -1,8 +1,11 @@
 import { Component, OnInit, OnDestroy, signal, computed, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router, ActivatedRoute, RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { AuthService } from '../../services/auth.service';
 import { WebSocketService } from '../../services/websocket.service';
+import { GameService } from '../../services/game.service';
+import { GameMoveDto, MoveRequest } from '../../models/game.model';
 import { ChessBoardComponent, ChessPiece, MoveEvent, PieceColor } from '../chess-board/chess-board.component';
 
 export interface PlayedMove {
@@ -72,6 +75,8 @@ export interface PlayedMove {
             <app-chess-board
               #boardComponent
               [orientation]="boardOrientation()"
+              [interactive]="isInteractive()"
+              [allowedColor]="allowedBoardColor()"
               [lastMove]="lastMove()"
               (moveMade)="onMoveMade($event)"
             ></app-chess-board>
@@ -615,6 +620,9 @@ export class GameComponent implements OnInit, OnDestroy {
   currentUser = this.authService.currentUser;
   opponentUsername = signal<string>('Adversaire');
 
+  // Game ID
+  gameId = signal<number | null>(null);
+
   // Colors & orientation
   userColor = signal<PieceColor>('white');
   boardOrientation = signal<PieceColor>('white');
@@ -628,6 +636,10 @@ export class GameComponent implements OnInit, OnDestroy {
   movesHistory = signal<PlayedMove[]>([]);
   whiteCaptures = signal<string[]>([]);
   blackCaptures = signal<string[]>([]);
+
+  private subscriptions: Subscription[] = [];
+  private processedMoveNumbers = new Set<number>();
+  private lastLocallySentMoveKey: string | null = null;
 
   // Computed layout helpers
   topPlayerName = computed(() => {
@@ -654,9 +666,25 @@ export class GameComponent implements OnInit, OnDestroy {
     return this.bottomPlayerColor() === 'white' ? this.whiteCaptures() : this.blackCaptures();
   });
 
+  isInteractive = computed(() => {
+    // If playing with a specific opponent, only allow move when it's your turn
+    if (this.opponentUsername() && this.opponentUsername() !== 'Adversaire') {
+      return this.currentTurn() === this.userColor();
+    }
+    return true; // Solo play mode allows both turns
+  });
+
+  allowedBoardColor = computed<PieceColor | null>(() => {
+    if (this.opponentUsername() && this.opponentUsername() !== 'Adversaire') {
+      return this.userColor();
+    }
+    return null;
+  });
+
   constructor(
     private authService: AuthService,
     private wsService: WebSocketService,
+    private gameService: GameService,
     private router: Router,
     private route: ActivatedRoute
   ) {}
@@ -667,7 +695,12 @@ export class GameComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // Read query params (opponent, color)
+    const currentUsername = this.currentUser()?.username;
+    if (currentUsername) {
+      this.wsService.connect(currentUsername);
+    }
+
+    // Read query params (opponent, color, gameId)
     this.route.queryParams.subscribe(params => {
       if (params['opponent']) {
         this.opponentUsername.set(params['opponent']);
@@ -679,16 +712,143 @@ export class GameComponent implements OnInit, OnDestroy {
         this.userColor.set('white');
         this.boardOrientation.set('white');
       }
+
+      if (params['gameId']) {
+        const gId = Number(params['gameId']);
+        this.gameId.set(gId);
+        this.initializeGame(gId);
+      } else if (params['opponent'] && currentUsername) {
+        // Find or create active game between the two users
+        const whiteUser = params['color'] === 'black' ? params['opponent'] : currentUsername;
+        const blackUser = params['color'] === 'black' ? currentUsername : params['opponent'];
+        this.gameService.findOrCreateGame(whiteUser, blackUser).subscribe({
+          next: (game) => {
+            this.gameId.set(game.id);
+            this.initializeGame(game.id);
+          },
+          error: (err) => {
+            console.error('Error finding/creating game:', err);
+          }
+        });
+      }
     });
   }
 
-  ngOnDestroy(): void {}
+  ngOnDestroy(): void {
+    this.subscriptions.forEach(sub => sub.unsubscribe());
+    const gId = this.gameId();
+    if (gId) {
+      this.wsService.unsubscribeFromGame(gId);
+    }
+  }
+
+  private initializeGame(gId: number): void {
+    console.log(`Initializing game session for ID #${gId}`);
+    
+    // 1. Subscribe to WebSocket game topic
+    this.wsService.subscribeToGame(gId);
+
+    // 2. Listen to real-time incoming moves
+    this.subscriptions.push(
+      this.wsService.gameMove$.subscribe(({ gameId, move }) => {
+        if (gameId === this.gameId()) {
+          console.log('Real-time move received via WebSocket:', move);
+          this.handleIncomingMove(move);
+        }
+      })
+    );
+
+    // 3. Load historical moves from DB
+    this.gameService.getGameMoves(gId).subscribe({
+      next: (moves) => {
+        console.log(`Loaded ${moves.length} moves from DB for game #${gId}:`, moves);
+        moves.forEach(m => this.handleIncomingMove(m));
+      },
+      error: (err) => {
+        console.error('Error loading game moves history:', err);
+      }
+    });
+  }
+
+  private handleIncomingMove(move: GameMoveDto): void {
+    if (move.moveNumber && this.processedMoveNumbers.has(move.moveNumber)) {
+      return; // Already processed
+    }
+
+    const moveKey = `${move.fromSquare.toLowerCase()}-${move.toSquare.toLowerCase()}-${move.moveNumber}`;
+    if (moveKey === this.lastLocallySentMoveKey) {
+      this.processedMoveNumbers.add(move.moveNumber);
+      return; // Originates from local move already executed on board
+    }
+
+    this.processedMoveNumbers.add(move.moveNumber);
+
+    // Apply move on the visual board
+    const moveEvent = this.boardComponent?.applyRemoteMove(move.fromSquare, move.toSquare);
+
+    this.lastMove.set({ from: move.fromSquare, to: move.toSquare });
+    this.moveCount.set(move.moveNumber);
+
+    // Handle captures
+    if (move.capturedPiece) {
+      const isWhiteMoving = move.color.toLowerCase() === 'white';
+      const capColor = isWhiteMoving ? 'black' : 'white';
+      const dummyPiece: ChessPiece = {
+        type: move.capturedPiece.toLowerCase() as any,
+        color: capColor
+      };
+      const symbol = this.boardComponent?.getPieceSymbol(dummyPiece) || '♟';
+      if (isWhiteMoving) {
+        this.whiteCaptures.update(caps => [...caps, symbol]);
+      } else {
+        this.blackCaptures.update(caps => [...caps, symbol]);
+      }
+    } else if (moveEvent?.captured) {
+      const symbol = this.boardComponent?.getPieceSymbol(moveEvent.captured) || '♟';
+      if (move.color.toLowerCase() === 'white') {
+        this.whiteCaptures.update(caps => [...caps, symbol]);
+      } else {
+        this.blackCaptures.update(caps => [...caps, symbol]);
+      }
+    }
+
+    // Update move history
+    const notation = move.notation || `${move.fromSquare}-${move.toSquare}`;
+    const currentHist = [...this.movesHistory()];
+
+    if (move.color.toLowerCase() === 'white') {
+      const newMoveNumber = currentHist.length + 1;
+      currentHist.push({
+        moveNumber: newMoveNumber,
+        white: notation,
+        timestamp: move.playedAt ? new Date(move.playedAt) : new Date()
+      });
+      this.currentTurn.set('black');
+    } else {
+      if (currentHist.length > 0 && !currentHist[currentHist.length - 1].black) {
+        currentHist[currentHist.length - 1].black = notation;
+      } else {
+        currentHist.push({
+          moveNumber: currentHist.length + 1,
+          black: notation,
+          timestamp: move.playedAt ? new Date(move.playedAt) : new Date()
+        });
+      }
+      this.currentTurn.set('white');
+    }
+
+    this.movesHistory.set(currentHist);
+  }
 
   onMoveMade(event: MoveEvent): void {
+    const nextMoveNumber = this.moveCount() + 1;
     this.lastMove.set({ from: event.from, to: event.to });
-    this.moveCount.update(c => c + 1);
+    this.moveCount.set(nextMoveNumber);
 
-    // Format algebraic-like notation (e.g. "e2-e4" or "Nf3")
+    this.lastLocallySentMoveKey = `${event.from.toLowerCase()}-${event.to.toLowerCase()}-${nextMoveNumber}`;
+    this.processedMoveNumbers.add(nextMoveNumber);
+
+    // Format algebraic-like notation (e.g. "e2-e4")
     const notation = `${event.from}-${event.to}`;
 
     // Handle captures
@@ -725,6 +885,24 @@ export class GameComponent implements OnInit, OnDestroy {
     }
 
     this.movesHistory.set(currentHist);
+
+    // Send move to backend via WebSocket for real-time sync & DB persistence
+    const gId = this.gameId();
+    if (gId) {
+      const moveRequest: MoveRequest = {
+        gameId: gId,
+        senderUsername: this.currentUser()?.username || 'Joueur',
+        from: event.from,
+        to: event.to,
+        piece: event.piece.type,
+        color: event.piece.color,
+        captured: event.captured ? event.captured.type : undefined,
+        notation: notation
+      };
+
+      console.log('Sending move via WebSocket:', moveRequest);
+      this.wsService.sendGameMove(moveRequest);
+    }
   }
 
   flipBoard(): void {
@@ -740,6 +918,8 @@ export class GameComponent implements OnInit, OnDestroy {
       this.movesHistory.set([]);
       this.whiteCaptures.set([]);
       this.blackCaptures.set([]);
+      this.processedMoveNumbers.clear();
+      this.lastLocallySentMoveKey = null;
     }
   }
 

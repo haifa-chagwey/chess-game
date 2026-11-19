@@ -889,9 +889,13 @@ export class LobbyComponent implements OnInit, OnDestroy {
           this.showToast(`🎉 ${inv.recipientUsername} a accepté votre défi d'échecs ! Lancement de la partie...`, 'success');
           setTimeout(() => {
             this.router.navigate(['/game'], {
-              queryParams: { opponent: inv.recipientUsername, color: 'white' }
+              queryParams: {
+                opponent: inv.recipientUsername,
+                color: 'white',
+                gameId: inv.gameId
+              }
             });
-          }, 1500);
+          }, 1000);
         } else if (inv.status === 'DECLINED') {
           this.showToast(`❌ ${inv.recipientUsername} a refusé votre invitation.`, 'warning');
         }
@@ -970,9 +974,13 @@ export class LobbyComponent implements OnInit, OnDestroy {
           this.showToast(`Défi accepté avec ${invitation.senderUsername} ! Lancement de la partie...`, 'success');
           setTimeout(() => {
             this.router.navigate(['/game'], {
-              queryParams: { opponent: invitation.senderUsername, color: 'black' }
+              queryParams: {
+                opponent: invitation.senderUsername,
+                color: 'black',
+                gameId: invitation.gameId
+              }
             });
-          }, 1500);
+          }, 1000);
         } else {
           this.showToast(`Défi refusé.`, 'info');
         }

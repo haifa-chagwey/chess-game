@@ -6,6 +6,7 @@ import SockJS from 'sockjs-client';
 import { User } from '../models/user.model';
 import { Invitation } from '../models/invitation.model';
 import { WebSocketNotification } from '../models/websocket.model';
+import { GameMoveDto, MoveRequest } from '../models/game.model';
 import { AuthService } from './auth.service';
 
 @Injectable({
@@ -24,8 +25,14 @@ export class WebSocketService {
   private invitationResponseSubject = new Subject<WebSocketNotification<Invitation>>();
   public invitationResponse$: Observable<WebSocketNotification<Invitation>> = this.invitationResponseSubject.asObservable();
 
+  private gameMoveSubject = new Subject<{ gameId: number; move: GameMoveDto }>();
+  public gameMove$: Observable<{ gameId: number; move: GameMoveDto }> = this.gameMoveSubject.asObservable();
+
   private connectedSubject = new BehaviorSubject<boolean>(false);
   public connected$: Observable<boolean> = this.connectedSubject.asObservable();
+
+  private activeGameSubscriptions: Map<number, any> = new Map();
+  private pendingGameSubscriptions: Set<number> = new Set();
 
   constructor(private authService: AuthService) {}
 
@@ -97,6 +104,12 @@ export class WebSocketService {
         destination: '/app/users/list',
         body: '{}'
       });
+
+      // Subscribe to any pending games
+      this.pendingGameSubscriptions.forEach((gameId) => {
+        this.performGameSubscription(gameId);
+      });
+      this.pendingGameSubscriptions.clear();
     };
 
     this.stompClient.onDisconnect = () => {
@@ -145,6 +158,62 @@ export class WebSocketService {
         destination: '/app/invite/respond',
         body: JSON.stringify({ responderUsername, invitationId, accept })
       });
+    }
+  }
+
+  subscribeToGame(gameId: number): void {
+    if (this.activeGameSubscriptions.has(gameId)) {
+      return;
+    }
+
+    if (this.stompClient && this.stompClient.connected) {
+      this.performGameSubscription(gameId);
+    } else {
+      this.pendingGameSubscriptions.add(gameId);
+    }
+  }
+
+  private performGameSubscription(gameId: number): void {
+    if (!this.stompClient || !this.stompClient.connected) return;
+
+    console.log(`Subscribing to game channel: /topic/game/${gameId}`);
+    const sub = this.stompClient.subscribe(`/topic/game/${gameId}`, (message: IMessage) => {
+      try {
+        const notification: WebSocketNotification<GameMoveDto> = JSON.parse(message.body);
+        console.log(`Received game message on /topic/game/${gameId}:`, notification);
+        if (notification.type === 'GAME_MOVE' && notification.payload) {
+          this.gameMoveSubject.next({ gameId, move: notification.payload });
+        }
+      } catch (e) {
+        console.error(`Error parsing game message on /topic/game/${gameId}`, e);
+      }
+    });
+
+    this.activeGameSubscriptions.set(gameId, sub);
+  }
+
+  unsubscribeFromGame(gameId: number): void {
+    this.pendingGameSubscriptions.delete(gameId);
+    const sub = this.activeGameSubscriptions.get(gameId);
+    if (sub) {
+      try {
+        sub.unsubscribe();
+      } catch (e) {
+        console.error(`Error unsubscribing from game ${gameId}`, e);
+      }
+      this.activeGameSubscriptions.delete(gameId);
+    }
+  }
+
+  sendGameMove(move: MoveRequest): void {
+    if (this.stompClient && this.stompClient.connected) {
+      console.log('Publishing game move via STOMP:', move);
+      this.stompClient.publish({
+        destination: '/app/game/move',
+        body: JSON.stringify(move)
+      });
+    } else {
+      console.warn('STOMP client not connected, unable to send move via WebSocket');
     }
   }
 }

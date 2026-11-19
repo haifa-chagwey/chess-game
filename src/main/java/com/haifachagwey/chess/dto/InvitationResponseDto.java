@@ -22,6 +22,7 @@ public class InvitationResponseDto {
     private InvitationStatus status;
     private LocalDateTime createdAt;
     private LocalDateTime respondedAt;
+    private Long gameId;
 
     public static InvitationResponseDto fromEntity(Invitation invitation) {
         if (invitation == null) return null;
@@ -34,6 +35,7 @@ public class InvitationResponseDto {
                 .status(invitation.getStatus())
                 .createdAt(invitation.getCreatedAt())
                 .respondedAt(invitation.getRespondedAt())
+                .gameId(invitation.getGameId())
                 .build();
     }
 }

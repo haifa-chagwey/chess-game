@@ -17,7 +17,10 @@ public class WebSocketNotification<T> {
         INVITATION_RECEIVED,
         INVITATION_ACCEPTED,
         INVITATION_DECLINED,
-        INVITATION_CANCELED
+        INVITATION_CANCELED,
+        GAME_STARTED,
+        GAME_MOVE,
+        GAME_ENDED
     }
 
     private Type type;

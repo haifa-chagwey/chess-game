@@ -5,7 +5,10 @@ export type WebSocketNotificationType =
   | 'INVITATION_RECEIVED'
   | 'INVITATION_ACCEPTED'
   | 'INVITATION_DECLINED'
-  | 'INVITATION_CANCELED';
+  | 'INVITATION_CANCELED'
+  | 'GAME_STARTED'
+  | 'GAME_MOVE'
+  | 'GAME_ENDED';
 
 export interface WebSocketNotification<T = any> {
   type: WebSocketNotificationType;

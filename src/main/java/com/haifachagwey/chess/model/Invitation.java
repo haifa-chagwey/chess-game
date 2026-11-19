@@ -35,6 +35,9 @@ public class Invitation {
     @Column
     private LocalDateTime respondedAt;
 
+    @Column
+    private Long gameId;
+
     @PrePersist
     protected void onCreate() {
         this.createdAt = LocalDateTime.now();

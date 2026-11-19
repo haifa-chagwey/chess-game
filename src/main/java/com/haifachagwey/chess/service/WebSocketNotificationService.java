@@ -54,4 +54,24 @@ public class WebSocketNotificationService {
                 .build();
         messagingTemplate.convertAndSend("/topic/invitations/" + senderUsername, notification);
     }
+
+    public void broadcastGameMove(Long gameId, com.haifachagwey.chess.dto.GameMoveDto move) {
+        log.info("Broadcasting move for game {}: {} from {} to {}", gameId, move.getPiece(), move.getFromSquare(), move.getToSquare());
+        WebSocketNotification<com.haifachagwey.chess.dto.GameMoveDto> notification = WebSocketNotification.<com.haifachagwey.chess.dto.GameMoveDto>builder()
+                .type(WebSocketNotification.Type.GAME_MOVE)
+                .message("Move made by " + move.getPlayerUsername())
+                .payload(move)
+                .build();
+        messagingTemplate.convertAndSend("/topic/game/" + gameId, notification);
+    }
+
+    public void broadcastGameStarted(Long gameId, com.haifachagwey.chess.dto.GameDto game) {
+        log.info("Broadcasting game started for game {}", gameId);
+        WebSocketNotification<com.haifachagwey.chess.dto.GameDto> notification = WebSocketNotification.<com.haifachagwey.chess.dto.GameDto>builder()
+                .type(WebSocketNotification.Type.GAME_STARTED)
+                .message("Game started")
+                .payload(game)
+                .build();
+        messagingTemplate.convertAndSend("/topic/game/" + gameId, notification);
+    }
 }

@@ -349,6 +349,7 @@ export interface MoveEvent {
 export class ChessBoardComponent implements OnInit {
   @Input() orientation: PieceColor = 'white';
   @Input() interactive: boolean = true;
+  @Input() allowedColor: PieceColor | null = null;
   @Input() showInSquareCoords: boolean = false;
   @Input() lastMove: { from: string; to: string } | null = null;
 
@@ -467,10 +468,52 @@ export class ChessBoardComponent implements OnInit {
 
     // 3. Otherwise, select the square if it contains a piece
     if (square.piece) {
+      if (this.allowedColor && square.piece.color !== this.allowedColor) {
+        return;
+      }
       this.selectedSquare.set(square);
       this.squareSelected.emit(square);
       this.computeSimpleTargets(square);
     }
+  }
+
+  /**
+   * Applies move received from remote peer or DB replay without emitting moveMade event.
+   */
+  applyRemoteMove(fromCoord: string, toCoord: string): MoveEvent | null {
+    const currentBoard = this.board().map(row => row.map(sq => ({ ...sq })));
+    let fromSquare: Square | null = null;
+    let toSquare: Square | null = null;
+
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        if (currentBoard[r][c].coordinate.toLowerCase() === fromCoord.toLowerCase()) {
+          fromSquare = currentBoard[r][c];
+        }
+        if (currentBoard[r][c].coordinate.toLowerCase() === toCoord.toLowerCase()) {
+          toSquare = currentBoard[r][c];
+        }
+      }
+    }
+
+    if (!fromSquare || !toSquare || !fromSquare.piece) {
+      return null;
+    }
+
+    const movingPiece = fromSquare.piece;
+    const capturedPiece = toSquare.piece;
+
+    toSquare.piece = { ...movingPiece, hasMoved: true };
+    fromSquare.piece = null;
+
+    this.board.set(currentBoard);
+
+    return {
+      from: fromCoord,
+      to: toCoord,
+      piece: movingPiece,
+      captured: capturedPiece
+    };
   }
 
   /**

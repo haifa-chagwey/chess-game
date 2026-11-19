@@ -9,6 +9,7 @@ export interface Invitation {
   status: InvitationStatus;
   createdAt: string;
   respondedAt?: string;
+  gameId?: number;
 }
 
 export interface InvitationRequest {

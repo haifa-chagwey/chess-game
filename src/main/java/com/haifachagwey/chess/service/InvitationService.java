@@ -26,6 +26,7 @@ public class InvitationService {
     private final InvitationRepository invitationRepository;
     private final UserRepository userRepository;
     private final WebSocketNotificationService notificationService;
+    private final GameService gameService;
 
     @Transactional
     public InvitationResponseDto sendInvitation(String senderUsername, InvitationRequest request) {
@@ -86,6 +87,11 @@ public class InvitationService {
         InvitationStatus newStatus = request.isAccept() ? InvitationStatus.ACCEPTED : InvitationStatus.DECLINED;
         invitation.setStatus(newStatus);
         invitation.setRespondedAt(LocalDateTime.now());
+
+        if (request.isAccept()) {
+            com.haifachagwey.chess.model.Game game = gameService.createGame(invitation.getSender(), invitation.getRecipient());
+            invitation.setGameId(game.getId());
+        }
 
         Invitation saved = invitationRepository.save(invitation);
         log.info("Invitation #{} responded by {}: {}", saved.getId(), responderUsername, newStatus);

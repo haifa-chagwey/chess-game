@@ -4,11 +4,14 @@ import com.haifachagwey.chess.config.WebSocketEventListener;
 import com.haifachagwey.chess.dto.InvitationActionRequest;
 import com.haifachagwey.chess.dto.InvitationRequest;
 import com.haifachagwey.chess.dto.InvitationResponseDto;
+import com.haifachagwey.chess.dto.MoveRequest;
 import com.haifachagwey.chess.dto.UserDto;
+import com.haifachagwey.chess.service.GameService;
 import com.haifachagwey.chess.service.InvitationService;
 import com.haifachagwey.chess.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
@@ -25,6 +28,7 @@ public class WebSocketController {
 
     private final UserService userService;
     private final InvitationService invitationService;
+    private final GameService gameService;
     private final WebSocketEventListener eventListener;
 
     @MessageMapping("/users/connect")
@@ -77,6 +81,29 @@ public class WebSocketController {
             }
         } catch (Exception e) {
             log.error("Failed to process STOMP invitation response: {}", e.getMessage());
+        }
+    }
+
+    @MessageMapping("/game/move")
+    public void handleGameMove(@Payload MoveRequest request) {
+        log.info("STOMP game move received for game {}: {} from {} to {} by {}",
+                request.getGameId(), request.getPiece(), request.getFrom(), request.getTo(), request.getSenderUsername());
+        try {
+            gameService.recordAndBroadcastMove(request);
+        } catch (Exception e) {
+            log.error("Failed to process STOMP game move: {}", e.getMessage(), e);
+        }
+    }
+
+    @MessageMapping("/game/{gameId}/move")
+    public void handleGameMoveWithId(@DestinationVariable Long gameId, @Payload MoveRequest request) {
+        request.setGameId(gameId);
+        log.info("STOMP game/{}/move received: {} from {} to {} by {}",
+                gameId, request.getPiece(), request.getFrom(), request.getTo(), request.getSenderUsername());
+        try {
+            gameService.recordAndBroadcastMove(request);
+        } catch (Exception e) {
+            log.error("Failed to process STOMP game move with ID: {}", e.getMessage(), e);
         }
     }
 }
